@@ -26,33 +26,36 @@ async def download_file(client: httpx.AsyncClient, url: str, path: str, progress
         logger.error(f"Failed to download {url}: {e}")
         return False
 
-async def download_hls(url: str, path: str):
-    """Downloads HLS (.m3u8) stream using ffmpeg."""
-    try:
-        # ffmpeg -i url -c copy -bsf:a aac_adtstoasc path.mp4
-        command = [
-            "ffmpeg", "-y", "-i", url,
-            "-c", "copy", "-bsf:a", "aac_adtstoasc",
-            path
-        ]
-        
-        # Run ffmpeg asynchronously
-        process = await asyncio.create_subprocess_exec(
-            *command,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE
-        )
-        
-        stdout, stderr = await process.communicate()
-        
-        if process.returncode != 0:
-            logger.error(f"FFmpeg HLS download failed for {url}:\n{stderr.decode()}")
-            return False
+async def download_hls(url: str, path: str, retries: int = 3):
+    """Downloads HLS (.m3u8) stream using ffmpeg with retries."""
+    for attempt in range(1, retries + 1):
+        try:
+            logger.info(f"HLS Download Attempt {attempt}/{retries} for {url[:50]}...")
+            command = [
+                "ffmpeg", "-y", "-i", url,
+                "-c", "copy", "-bsf:a", "aac_adtstoasc",
+                path
+            ]
             
-        return True
-    except Exception as e:
-        logger.error(f"Error downloading HLS from {url}: {e}")
-        return False
+            process = await asyncio.create_subprocess_exec(
+                *command,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+            
+            stdout, stderr = await process.communicate()
+            
+            if process.returncode == 0:
+                return True
+            else:
+                logger.warning(f"FFmpeg HLS failed (Attempt {attempt}): {stderr.decode()[:200]}")
+                if attempt < retries:
+                    await asyncio.sleep(5)
+        except Exception as e:
+            logger.error(f"Error during HLS attempt {attempt}: {e}")
+            if attempt < retries:
+                await asyncio.sleep(5)
+    return False
 
 async def download_all_episodes(episodes, download_dir: str, semaphore_count: int = 5):
     """
@@ -62,8 +65,6 @@ async def download_all_episodes(episodes, download_dir: str, semaphore_count: in
     os.makedirs(download_dir, exist_ok=True)
     semaphore = asyncio.Semaphore(semaphore_count)
 
-    tasks = []
-    
     async def limited_download(ep):
         async with semaphore:
             # Episode number formatting
@@ -78,12 +79,12 @@ async def download_all_episodes(episodes, download_dir: str, semaphore_count: in
                 logger.error(f"No URL found for episode {ep_num}")
                 return False
             
+            success = False
             if ".m3u8" in url.lower():
-                # For HLS streams
                 success = await download_hls(url, filepath)
             else:
-                # For direct MP4 links
-                async with httpx.AsyncClient(timeout=60) as client:
+                # Increased timeout to 120s
+                async with httpx.AsyncClient(timeout=120) as client:
                     success = await download_file(client, url, filepath)
             
             if success:
