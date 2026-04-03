@@ -1,0 +1,15 @@
+.env
+__pycache__/
+*.pyc
+processed.json
+*.mp4
+test_*.py
+episode_test.json
+*.session
+*.session-journal
+node_modules/
+dist/
+build/
+.vscode/
+.idea/
+*.log

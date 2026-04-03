@@ -38,20 +38,27 @@ async def download_all_episodes(episodes, download_dir: str, semaphore_count: in
     async def limited_download(ep):
         async with semaphore:
             # Sort episodes by episodeNum
-            ep_num = str(ep.get('episode', 'unk')).zfill(3)
+            ep_num_val = ep.get('episode_no') or ep.get('episode') or 'unk'
+            ep_num = str(ep_num_val).zfill(3)
             filename = f"episode_{ep_num}.mp4"
             filepath = os.path.join(download_dir, filename)
             
             url = None
-            videos = ep.get('videos', [])
+            # Handle new API structure: 'progressive' instead of 'videos'
+            videos = ep.get('progressive') or ep.get('videos', [])
+            
             if isinstance(videos, list) and videos:
-                # Prefer highest quality, or just the first in the list 
-                # (API seems to sort them descending by quality usually)
-                url = videos[0].get('url')
+                # Set default to first video
+                url = videos[0].get('video_url') or videos[0].get('url')
                 for video in videos:
-                    if video.get('quality') in ['1080P', '720P']:
-                        url = video.get('url')
+                    quality = video.get('title') or video.get('quality', '')
+                    if any(q in quality.upper() for q in ['1080P', '720P']):
+                        url = video.get('video_url') or video.get('url')
                         break
+            
+            # Fallback to direct video_url if available
+            if not url:
+                url = ep.get('video_url') or ep.get('playUrl')
 
             if not url:
                 logger.error(f"No URL found for episode {ep_num}")
