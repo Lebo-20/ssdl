@@ -272,28 +272,51 @@ async def auto_mode_loop():
             interval = 5 if is_initial_run else 15
             logger.info(f"🔍 Scanning StarShort (Next scan in {interval}m)...")
             
-            # Combine latest, hot and trending
+            # Combine latest, hot, recommended and trending
             all_potential = []
             
-            latest = await get_latest_dramas(page=1) or []
-            hot = await get_popular() or []
-            trending = await get_popular() or [] # Trending/recommended fallback
+            async def safe_fetch(coro):
+                try:
+                    res = await coro
+                    if isinstance(res, list): return res
+                    if isinstance(res, dict): return res.get("data", [])
+                    return []
+                except Exception as e:
+                    logger.error(f"Fetch error: {e}")
+                    return []
+
+            # Fetch page 1 and 2 for each category to get more content
+            categories = [
+                get_latest_dramas(page=1),
+                get_latest_dramas(page=2),
+                get_popular(page=1),
+                get_popular(page=2),
+                get_top_rated(page=1),
+                get_top_rated(page=2),
+                get_trending()
+            ]
+
+            results = await asyncio.gather(*[safe_fetch(cat) for cat in categories])
             
-            def extract_dramas(data):
-                if isinstance(data, list): return data
-                if isinstance(data, dict): return data.get("data", [])
-                return []
-            
-            combined = extract_dramas(latest) + extract_dramas(hot) + extract_dramas(trending)
+            combined = []
+            seen_ids = set()
+            for res_list in results:
+                for d in res_list:
+                    bid = str(d.get("id") or d.get("bookId") or d.get("bookid", ""))
+                    if bid and bid not in seen_ids:
+                        combined.append(d)
+                        seen_ids.add(bid)
             
             new_found_list = []
             for d in combined:
                 bid = str(d.get("id") or d.get("bookId") or d.get("bookid", ""))
                 if bid and bid not in processed_ids:
                     new_found_list.append(d)
-                    processed_ids.add(bid)
 
             random.shuffle(new_found_list)
+            
+            if not new_found_list:
+                logger.info("ℹ️ No new dramas found in this scan.")
             
             for drama in new_found_list:
                 if not BotState.is_auto_running:
@@ -302,7 +325,10 @@ async def auto_mode_loop():
                 book_id = str(drama.get("id") or drama.get("bookId") or drama.get("bookid", ""))
                 title = drama.get("title") or drama.get("bookName") or "Unknown"
                 
+                # Mark as processed immediately to avoid re-trying on failure
+                processed_ids.add(book_id)
                 save_processed(processed_ids)
+                
                 logger.info(f"✨ StarShort Discovery: {title} ({book_id}). Starting process...")
                 
                 try:
@@ -320,11 +346,11 @@ async def auto_mode_loop():
                     except: pass
                 else:
                     logger.error(f"❌ Failed to process {title}")
-                    BotState.is_auto_running = False
+                    # DO NOT stop auto-mode anymore. Just log and notify.
                     try:
-                        await client.send_message(ADMIN_ID, f"🚨 **STARSHORT ERROR**: Proses `{title}` gagal!\n🛑 **Auto-mode OTOMATIS BERHENTI**.")
+                        await client.send_message(ADMIN_ID, f"⚠️ **Gagal Auto-Post**: `{title}` (ID: `{book_id}`).\nMelanjutkan ke drama berikutnya...")
                     except: pass
-                    break
+                    # continue to next drama
                     
                 await asyncio.sleep(15) 
                 

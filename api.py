@@ -34,12 +34,14 @@ async def get_home(page: int = 1):
     return await get_trending()
 
 async def get_popular(page: int = 1):
+    """Popular/Hot dramas."""
     url = f"{BASE_URL}/content/hot"
-    return await _fetch(url)
+    return await _fetch(url, {"p": page})
 
 async def get_top_rated(page: int = 1):
+    """Top rated/Recommended dramas."""
     url = f"{BASE_URL}/content/recommended"
-    return await _fetch(url)
+    return await _fetch(url, {"p": page})
 
 async def get_trending():
     url = f"{BASE_URL}/content/trending"
