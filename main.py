@@ -12,7 +12,8 @@ load_dotenv()
 # Local imports
 from api import (
     get_drama_detail, get_all_episodes, get_latest_dramas,
-    get_popular, get_top_rated, search_dramas, get_watch_info
+    get_popular, get_top_rated, search_dramas, get_watch_info,
+    get_trending
 )
 from downloader import download_all_episodes
 from merge import merge_episodes
@@ -207,15 +208,24 @@ async def process_drama_full(book_id, chat_id, status_msg=None):
         if status_msg: await status_msg.edit(f"🔍 Merangkum info video untuk **{title}**...")
         
         full_episodes = []
+        missing_eps = []
         for ep in raw_episodes:
             ep_num = ep.get("episode")
             watch_info = await get_watch_info(book_id, ep_num)
-            if watch_info and watch_info.get("video_url"):
+            if watch_info and (watch_info.get("video_url") or watch_info.get("url")):
                 full_episodes.append({
                     "episode": ep_num,
-                    "video_url": watch_info["video_url"]
+                    "video_url": watch_info.get("video_url") or watch_info.get("url")
                 })
+            else:
+                missing_eps.append(ep_num)
         
+        if missing_eps:
+            err_msg = f"❌ Gagal mengambil URL untuk episode: {missing_eps}"
+            logger.error(err_msg)
+            if status_msg: await status_msg.edit(f"❌ Detail Video Tidak Lengkap.\nEpisode bermasalah: {missing_eps}")
+            return False
+            
         if not full_episodes:
             if status_msg: await status_msg.edit("❌ Gagal mengambil URL video episode.")
             return False
@@ -223,9 +233,14 @@ async def process_drama_full(book_id, chat_id, status_msg=None):
         if status_msg: await status_msg.edit(f"🎬 Men-download {len(full_episodes)} episode **{title}**...")
         
         # Download
-        success = await download_all_episodes(full_episodes, video_dir)
+        success, all_errors = await download_all_episodes(full_episodes, video_dir)
         if not success:
-            if status_msg: await status_msg.edit("❌ Download Gagal.")
+            error_text = "\n".join(all_errors[:5]) # Show first 5 errors to avoid message length limits
+            if len(all_errors) > 5:
+                error_text += f"\n...dan {len(all_errors) - 5} error lainnya."
+            
+            if status_msg: 
+                await status_msg.edit(f"❌ **Download Gagal untuk {title}**\nGagal setelah 5x percobaan.\n\n**Alasan:**\n`{error_text}`")
             return False
 
         # Merge
@@ -251,11 +266,15 @@ async def process_drama_full(book_id, chat_id, status_msg=None):
             
     except Exception as e:
         logger.error(f"Error processing {book_id}: {e}")
-        if status_msg: await status_msg.edit(f"❌ Error: {e}")
+        if status_msg:
+            try: await status_msg.edit(f"❌ Error Terjadi: {e}")
+            except: pass
         return False
     finally:
+        # Cleanup temp directory
         if os.path.exists(temp_dir):
-            shutil.rmtree(temp_dir)
+            try: shutil.rmtree(temp_dir)
+            except Exception as ex: logger.warning(f"Could not remove temp_dir {temp_dir}: {ex}")
 
 async def auto_mode_loop():
     """Auto scanner using StarShort endpoints."""
@@ -345,12 +364,12 @@ async def auto_mode_loop():
                         await client.send_message(ADMIN_ID, f"✅ Sukses Auto-Post StarShort: **{title}**.")
                     except: pass
                 else:
-                    logger.error(f"❌ Failed to process {title}")
-                    # DO NOT stop auto-mode anymore. Just log and notify.
+                    logger.error(f"❌ Gagal memproses {title}")
                     try:
-                        await client.send_message(ADMIN_ID, f"⚠️ **Gagal Auto-Post**: `{title}` (ID: `{book_id}`).\nMelanjutkan ke drama berikutnya...")
+                        await client.send_message(ADMIN_ID, f"⚠️ **STARSHORT WARNING**: Proses `{title}` ({book_id}) gagal.\nMelanjutkan ke drama berikutnya...")
                     except: pass
-                    # continue to next drama
+                    # We don't stop the loop anymore, just continue to next drama
+                    continue
                     
                 await asyncio.sleep(15) 
                 
